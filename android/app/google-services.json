@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "810651644664",
+    "project_id": "the-dhemhi-closet",
+    "storage_bucket": "the-dhemhi-closet.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:810651644664:android:45a0fe1dc6d2f6f18d410d",
+        "android_client_info": {
+          "package_name": "com.example.tdb_closet"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCvvKBnfZcafWiTLsA5VhEehrLMppivrG4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
