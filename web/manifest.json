@@ -1,11 +1,11 @@
 {
-    "name": "tdb_closet",
+    "name": "TDB Closet",
     "short_name": "tdb_closet",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#ffffff",
     "theme_color": "#ffffff",
-    "description": "A new Flutter project.",
+    "description": "The dhemhi brand , home of corporate fashion.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

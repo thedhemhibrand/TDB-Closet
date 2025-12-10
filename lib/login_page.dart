@@ -1,6 +1,7 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:fluttertoast/fluttertoast.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -32,32 +33,89 @@ class _LoginPageState extends State<LoginPage> {
     _loadRememberMe();
   }
 
-  Future<void> _loadRememberMe() async {
-    final prefs = await SharedPreferences.getInstance();
-    final email = prefs.getString('saved_email') ?? '';
-    final remember = prefs.getBool('remember_me') ?? false;
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
 
-    if (remember) {
-      setState(() {
-        _emailController.text = email;
-        _rememberMe = true;
-      });
+  Future<void> _loadRememberMe() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final email = prefs.getString('saved_email') ?? '';
+      final remember = prefs.getBool('remember_me') ?? false;
+
+      if (remember && mounted) {
+        setState(() {
+          _emailController.text = email;
+          _rememberMe = true;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading preferences: $e');
+      // Non-critical error, continue without saved credentials
     }
   }
 
   Future<void> _saveCredentials() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (_rememberMe) {
-      await prefs.setString('saved_email', _emailController.text.trim());
-      await prefs.setBool('remember_me', true);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (_rememberMe) {
+        await prefs.setString('saved_email', _emailController.text.trim());
+        await prefs.setBool('remember_me', true);
+      } else {
+        await prefs.remove('saved_email');
+        await prefs.remove('remember_me');
+      }
+    } catch (e) {
+      debugPrint('Error saving credentials: $e');
+      // Non-critical error, continue with login
+    }
+  }
+
+  Future<void> _updateFCMToken(String userId) async {
+    // Skip FCM on web if not supported
+    if (kIsWeb) {
+      try {
+        // Web FCM requires special setup, skip if not configured
+        String? token = await FirebaseMessaging.instance.getToken(
+          vapidKey: null, // Add your VAPID key if you have FCM web configured
+        );
+        
+        if (token != null) {
+          await FirebaseFirestore.instance
+              .collection('users')
+              .doc(userId)
+              .update({
+                'fcmTokens': FieldValue.arrayUnion([token]),
+              });
+        }
+      } catch (e) {
+        debugPrint('FCM Token update failed on web (non-critical): $e');
+        // Don't fail login if FCM fails
+      }
     } else {
-      await prefs.remove('saved_email');
-      await prefs.remove('remember_me');
+      // Mobile FCM
+      try {
+        String? token = await FirebaseMessaging.instance.getToken();
+        if (token != null) {
+          await FirebaseFirestore.instance
+              .collection('users')
+              .doc(userId)
+              .update({
+                'fcmTokens': FieldValue.arrayUnion([token]),
+              });
+        }
+      } catch (e) {
+        debugPrint('FCM Token update failed (non-critical): $e');
+        // Don't fail login if FCM fails
+      }
     }
   }
 
   Future<void> _login() async {
-    // 🔒 Defensive check: ensure Form is attached
+    // Defensive check: ensure Form is attached
     if (_formKey.currentState == null) {
       debugPrint('⚠️ Form key has no currentState — missing Form widget.');
       _showToast('UI error: Form not initialized. Please restart.', Colors.red);
@@ -72,6 +130,7 @@ class _LoginPageState extends State<LoginPage> {
       final email = _emailController.text.trim();
       final password = _passwordController.text.trim();
 
+      // Sign in with Firebase
       final userCredential = await _auth.signInWithEmailAndPassword(
         email: email,
         password: password,
@@ -82,26 +141,23 @@ class _LoginPageState extends State<LoginPage> {
         throw Exception('Authentication succeeded but no user returned.');
       }
 
-      String? token = await FirebaseMessaging.instance.getToken();
-      if (token != null) {
-        await FirebaseFirestore.instance
-            .collection('users')
-            .doc(user.uid)
-            .update({
-              'fcmTokens': FieldValue.arrayUnion([token]),
-            })
-            .onError((e, _) {
-              debugPrint('FCM Token update failed: $e');
-            });
-      }
+      // Update FCM token (non-blocking, won't fail login)
+      _updateFCMToken(user.uid);
 
+      // Save credentials (non-blocking, won't fail login)
       await _saveCredentials();
 
+      // Check if widget is still mounted before navigation
+      if (!mounted) return;
+
       _showToast('✅ Welcome back!', Colors.green);
+      
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (context) => const HomePage()),
       );
     } on FirebaseAuthException catch (e) {
+      if (!mounted) return;
+      
       String message = 'Login failed. Please try again.';
       switch (e.code) {
         case 'user-not-found':
@@ -122,26 +178,48 @@ class _LoginPageState extends State<LoginPage> {
         case 'network-request-failed':
           message = '📶 Network error. Check your connection.';
           break;
+        case 'invalid-credential':
+          message = '🔒 Invalid credentials. Check your email and password.';
+          break;
+        default:
+          message = '❌ Login failed: ${e.message ?? e.code}';
       }
       _showToast(message, Colors.red);
-    } catch (e) {
+      debugPrint('FirebaseAuthException: ${e.code} - ${e.message}');
+    } catch (e, stackTrace) {
+      if (!mounted) return;
+      
       _showToast('❌ Unexpected error. Please try again.', Colors.red);
       debugPrint('Login Error: $e');
+      debugPrint('Stack trace: $stackTrace');
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
   void _showToast(String msg, Color color) {
-    Fluttertoast.showToast(
-      msg: msg,
-      toastLength: Toast.LENGTH_LONG,
-      gravity: ToastGravity.BOTTOM,
-      timeInSecForIosWeb: 4,
-      backgroundColor: color,
-      textColor: Colors.white,
-      fontSize: 16.0,
-    );
+    if (kIsWeb) {
+      // Fluttertoast might not work well on web, use ScaffoldMessenger as fallback
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(msg),
+          backgroundColor: color,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    } else {
+      Fluttertoast.showToast(
+        msg: msg,
+        toastLength: Toast.LENGTH_LONG,
+        gravity: ToastGravity.BOTTOM,
+        timeInSecForIosWeb: 4,
+        backgroundColor: color,
+        textColor: Colors.white,
+        fontSize: 16.0,
+      );
+    }
   }
 
   @override
@@ -152,8 +230,7 @@ class _LoginPageState extends State<LoginPage> {
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24.0),
           child: Form(
-            // ✅ CRITICAL: Form wrapper added
-            key: _formKey, // ✅ With key
+            key: _formKey,
             child: SingleChildScrollView(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -252,55 +329,55 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   Widget _buildEmailField() => TextFormField(
-    controller: _emailController,
-    decoration: InputDecoration(
-      labelText: 'Email',
-      labelStyle: DhemiText.bodySmall,
-      prefixIcon: Icon(Icons.email_outlined, color: DhemiColors.royalPurple),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: DhemiColors.gray300),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: DhemiColors.royalPurple, width: 2),
-      ),
-    ),
-    keyboardType: TextInputType.emailAddress,
-    validator: (value) {
-      final email = value?.trim();
-      if (email == null || email.isEmpty) return 'Please enter your email';
-      if (!RegExp(r'^[^@]+@[^@]+\.[^@]+').hasMatch(email)) {
-        return 'Invalid email format';
-      }
-      return null;
-    },
-  );
+        controller: _emailController,
+        decoration: InputDecoration(
+          labelText: 'Email',
+          labelStyle: DhemiText.bodySmall,
+          prefixIcon: Icon(Icons.email_outlined, color: DhemiColors.royalPurple),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: DhemiColors.gray300),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: DhemiColors.royalPurple, width: 2),
+          ),
+        ),
+        keyboardType: TextInputType.emailAddress,
+        validator: (value) {
+          final email = value?.trim();
+          if (email == null || email.isEmpty) return 'Please enter your email';
+          if (!RegExp(r'^[^@]+@[^@]+\.[^@]+').hasMatch(email)) {
+            return 'Invalid email format';
+          }
+          return null;
+        },
+      );
 
   Widget _buildPasswordField() => TextFormField(
-    controller: _passwordController,
-    obscureText: _obscurePassword,
-    decoration: InputDecoration(
-      labelText: 'Password',
-      labelStyle: DhemiText.bodySmall,
-      prefixIcon: Icon(Icons.lock_outline, color: DhemiColors.royalPurple),
-      suffixIcon: IconButton(
-        icon: Icon(
-          _obscurePassword ? Icons.visibility_off : Icons.visibility,
-          color: DhemiColors.gray500,
+        controller: _passwordController,
+        obscureText: _obscurePassword,
+        decoration: InputDecoration(
+          labelText: 'Password',
+          labelStyle: DhemiText.bodySmall,
+          prefixIcon: Icon(Icons.lock_outline, color: DhemiColors.royalPurple),
+          suffixIcon: IconButton(
+            icon: Icon(
+              _obscurePassword ? Icons.visibility_off : Icons.visibility,
+              color: DhemiColors.gray500,
+            ),
+            onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+          ),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: DhemiColors.gray300),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: DhemiColors.royalPurple, width: 2),
+          ),
         ),
-        onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
-      ),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: DhemiColors.gray300),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: DhemiColors.royalPurple, width: 2),
-      ),
-    ),
-    validator: (value) =>
-        value?.trim().isEmpty == true ? 'Password is required' : null,
-  );
+        validator: (value) =>
+            value?.trim().isEmpty == true ? 'Password is required' : null,
+      );
 }

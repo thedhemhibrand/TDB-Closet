@@ -1,6 +1,7 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:fluttertoast/fluttertoast.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:tdb_closet/home_page.dart';
@@ -26,6 +27,16 @@ class _SignupPageState extends State<SignupPage> {
 
   final _auth = FirebaseAuth.instance;
 
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _passwordController.dispose();
+    _firstNameController.dispose();
+    _lastNameController.dispose();
+    _phoneController.dispose();
+    super.dispose();
+  }
+
   void _checkPasswordStrength(String password) {
     if (password.isEmpty) {
       setState(() => _passwordStrength = null);
@@ -49,8 +60,27 @@ class _SignupPageState extends State<SignupPage> {
     });
   }
 
+  Future<String?> _getFCMToken() async {
+    try {
+      if (kIsWeb) {
+        // Web FCM requires special setup
+        String? token = await FirebaseMessaging.instance.getToken(
+          vapidKey: null, // Add your VAPID key if you have FCM web configured
+        );
+        return token;
+      } else {
+        // Mobile FCM
+        String? token = await FirebaseMessaging.instance.getToken();
+        return token;
+      }
+    } catch (e) {
+      debugPrint('FCM Token retrieval failed (non-critical): $e');
+      return null;
+    }
+  }
+
   Future<void> _signup() async {
-    // 🔒 Defensive check: ensure Form is attached
+    // Defensive check: ensure Form is attached
     if (_formKey.currentState == null) {
       debugPrint('⚠️ Form key has no currentState — missing Form widget.');
       _showToast('UI error: Form not initialized. Please restart.', Colors.red);
@@ -81,7 +111,8 @@ class _SignupPageState extends State<SignupPage> {
         throw Exception('User creation failed — no user returned.');
       }
 
-      String? token = await FirebaseMessaging.instance.getToken();
+      // Get FCM token (non-blocking, won't fail signup)
+      String? token = await _getFCMToken();
 
       final userData = {
         'firstName': _firstNameController.text.trim(),
@@ -98,14 +129,19 @@ class _SignupPageState extends State<SignupPage> {
           .doc(user.uid)
           .set(userData, SetOptions(merge: true));
 
-      _showToast('🎉 Account created! Welcome to TDB Closets!', Colors.green);
-
       await user.reload();
+
+      // Check if widget is still mounted before navigation
+      if (!mounted) return;
+
+      _showToast('🎉 Account created! Welcome to TDB Closets!', Colors.green);
 
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (context) => const HomePage()),
       );
     } on FirebaseAuthException catch (e) {
+      if (!mounted) return;
+
       String msg = 'Signup failed. Please try again.';
       switch (e.code) {
         case 'email-already-in-use':
@@ -123,29 +159,48 @@ class _SignupPageState extends State<SignupPage> {
         case 'network-request-failed':
           msg = '📶 Network error. Check your connection and try again.';
           break;
+        default:
+          msg = '❌ Signup failed: ${e.message ?? e.code}';
       }
       _showToast(msg, Colors.red);
-    } catch (e) {
+      debugPrint('FirebaseAuthException: ${e.code} - ${e.message}');
+    } catch (e, stackTrace) {
+      if (!mounted) return;
+
       _showToast(
         '❌ Something unexpected happened. Please try again.',
         Colors.red,
       );
       debugPrint('Signup Error: $e');
+      debugPrint('Stack trace: $stackTrace');
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
   void _showToast(String msg, Color color) {
-    Fluttertoast.showToast(
-      msg: msg,
-      toastLength: Toast.LENGTH_LONG,
-      gravity: ToastGravity.BOTTOM,
-      timeInSecForIosWeb: 4,
-      backgroundColor: color,
-      textColor: Colors.white,
-      fontSize: 16.0,
-    );
+    if (kIsWeb) {
+      // Fluttertoast might not work well on web, use ScaffoldMessenger as fallback
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(msg),
+          backgroundColor: color,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    } else {
+      Fluttertoast.showToast(
+        msg: msg,
+        toastLength: Toast.LENGTH_LONG,
+        gravity: ToastGravity.BOTTOM,
+        timeInSecForIosWeb: 4,
+        backgroundColor: color,
+        textColor: Colors.white,
+        fontSize: 16.0,
+      );
+    }
   }
 
   @override
@@ -156,8 +211,7 @@ class _SignupPageState extends State<SignupPage> {
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24.0),
           child: Form(
-            // ✅ CRITICAL: Form wrapper added
-            key: _formKey, // ✅ With key
+            key: _formKey,
             child: SingleChildScrollView(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -240,127 +294,127 @@ class _SignupPageState extends State<SignupPage> {
   }
 
   Widget _buildFirstNameField() => TextFormField(
-    controller: _firstNameController,
-    decoration: InputDecoration(
-      labelText: 'First Name',
-      labelStyle: DhemiText.bodySmall,
-      prefixIcon: Icon(Icons.person_outline, color: DhemiColors.royalPurple),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: DhemiColors.gray300),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: DhemiColors.royalPurple, width: 2),
-      ),
-    ),
-    validator: (value) =>
-        value?.trim().isEmpty == true ? 'Please enter your first name' : null,
-  );
+        controller: _firstNameController,
+        decoration: InputDecoration(
+          labelText: 'First Name',
+          labelStyle: DhemiText.bodySmall,
+          prefixIcon: Icon(Icons.person_outline, color: DhemiColors.royalPurple),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: DhemiColors.gray300),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: DhemiColors.royalPurple, width: 2),
+          ),
+        ),
+        validator: (value) =>
+            value?.trim().isEmpty == true ? 'Please enter your first name' : null,
+      );
 
   Widget _buildLastNameField() => TextFormField(
-    controller: _lastNameController,
-    decoration: InputDecoration(
-      labelText: 'Last Name',
-      labelStyle: DhemiText.bodySmall,
-      prefixIcon: Icon(Icons.person_outline, color: DhemiColors.royalPurple),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: DhemiColors.gray300),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: DhemiColors.royalPurple, width: 2),
-      ),
-    ),
-    validator: (value) =>
-        value?.trim().isEmpty == true ? 'Please enter your last name' : null,
-  );
+        controller: _lastNameController,
+        decoration: InputDecoration(
+          labelText: 'Last Name',
+          labelStyle: DhemiText.bodySmall,
+          prefixIcon: Icon(Icons.person_outline, color: DhemiColors.royalPurple),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: DhemiColors.gray300),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: DhemiColors.royalPurple, width: 2),
+          ),
+        ),
+        validator: (value) =>
+            value?.trim().isEmpty == true ? 'Please enter your last name' : null,
+      );
 
   Widget _buildPhoneField() => TextFormField(
-    controller: _phoneController,
-    decoration: InputDecoration(
-      labelText: 'Phone Number',
-      labelStyle: DhemiText.bodySmall,
-      prefixIcon: Icon(Icons.phone_outlined, color: DhemiColors.royalPurple),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: DhemiColors.gray300),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: DhemiColors.royalPurple, width: 2),
-      ),
-    ),
-    keyboardType: TextInputType.phone,
-    validator: (value) {
-      final trimmed = value?.trim() ?? '';
-      if (trimmed.isEmpty) return 'Please enter your phone number';
-      final digitsOnly = RegExp(
-        r'\d{10,}',
-      ).hasMatch(trimmed.replaceAll(RegExp(r'\D'), ''));
-      if (!digitsOnly) {
-        return 'Please enter a valid phone number (e.g. +2348012345678)';
-      }
-      return null;
-    },
-  );
+        controller: _phoneController,
+        decoration: InputDecoration(
+          labelText: 'Phone Number',
+          labelStyle: DhemiText.bodySmall,
+          prefixIcon: Icon(Icons.phone_outlined, color: DhemiColors.royalPurple),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: DhemiColors.gray300),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: DhemiColors.royalPurple, width: 2),
+          ),
+        ),
+        keyboardType: TextInputType.phone,
+        validator: (value) {
+          final trimmed = value?.trim() ?? '';
+          if (trimmed.isEmpty) return 'Please enter your phone number';
+          final digitsOnly = RegExp(
+            r'\d{10,}',
+          ).hasMatch(trimmed.replaceAll(RegExp(r'\D'), ''));
+          if (!digitsOnly) {
+            return 'Please enter a valid phone number (e.g. +2348012345678)';
+          }
+          return null;
+        },
+      );
 
   Widget _buildEmailField() => TextFormField(
-    controller: _emailController,
-    decoration: InputDecoration(
-      labelText: 'Email',
-      labelStyle: DhemiText.bodySmall,
-      prefixIcon: Icon(Icons.email_outlined, color: DhemiColors.royalPurple),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: DhemiColors.gray300),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: DhemiColors.royalPurple, width: 2),
-      ),
-    ),
-    keyboardType: TextInputType.emailAddress,
-    validator: (value) {
-      final email = value?.trim();
-      if (email == null || email.isEmpty) return 'Please enter your email';
-      final emailRegex = RegExp(r'^[^@]+@[^@]+\.[^@]+');
-      if (!emailRegex.hasMatch(email)) return 'Please enter a valid email';
-      return null;
-    },
-  );
+        controller: _emailController,
+        decoration: InputDecoration(
+          labelText: 'Email',
+          labelStyle: DhemiText.bodySmall,
+          prefixIcon: Icon(Icons.email_outlined, color: DhemiColors.royalPurple),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: DhemiColors.gray300),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: DhemiColors.royalPurple, width: 2),
+          ),
+        ),
+        keyboardType: TextInputType.emailAddress,
+        validator: (value) {
+          final email = value?.trim();
+          if (email == null || email.isEmpty) return 'Please enter your email';
+          final emailRegex = RegExp(r'^[^@]+@[^@]+\.[^@]+');
+          if (!emailRegex.hasMatch(email)) return 'Please enter a valid email';
+          return null;
+        },
+      );
 
   Widget _buildPasswordField() => TextFormField(
-    controller: _passwordController,
-    obscureText: _obscurePassword,
-    onChanged: _checkPasswordStrength,
-    decoration: InputDecoration(
-      labelText: 'Password',
-      labelStyle: DhemiText.bodySmall,
-      prefixIcon: Icon(Icons.lock_outline, color: DhemiColors.royalPurple),
-      suffixIcon: IconButton(
-        icon: Icon(
-          _obscurePassword ? Icons.visibility_off : Icons.visibility,
-          color: DhemiColors.gray500,
+        controller: _passwordController,
+        obscureText: _obscurePassword,
+        onChanged: _checkPasswordStrength,
+        decoration: InputDecoration(
+          labelText: 'Password',
+          labelStyle: DhemiText.bodySmall,
+          prefixIcon: Icon(Icons.lock_outline, color: DhemiColors.royalPurple),
+          suffixIcon: IconButton(
+            icon: Icon(
+              _obscurePassword ? Icons.visibility_off : Icons.visibility,
+              color: DhemiColors.gray500,
+            ),
+            onPressed: () {
+              setState(() => _obscurePassword = !_obscurePassword);
+            },
+          ),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: DhemiColors.gray300),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: DhemiColors.royalPurple, width: 2),
+          ),
         ),
-        onPressed: () {
-          setState(() => _obscurePassword = !_obscurePassword);
+        validator: (value) {
+          if (value == null || value.isEmpty) return 'Please enter a password';
+          if (value.length < 6) return 'Password must be at least 6 characters';
+          return null;
         },
-      ),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: DhemiColors.gray300),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: DhemiColors.royalPurple, width: 2),
-      ),
-    ),
-    validator: (value) {
-      if (value == null || value.isEmpty) return 'Please enter a password';
-      if (value.length < 6) return 'Password must be at least 6 characters';
-      return null;
-    },
-  );
+      );
 }
