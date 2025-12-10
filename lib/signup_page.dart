@@ -3,8 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:tdb_closet/login_page.dart';
-
+import 'package:tdb_closet/home_page.dart';
 import 'package:tdb_closet/utils.dart';
 
 class SignupPage extends StatefulWidget {
@@ -20,8 +19,10 @@ class _SignupPageState extends State<SignupPage> {
   final _passwordController = TextEditingController();
   final _firstNameController = TextEditingController();
   final _lastNameController = TextEditingController();
+  final _phoneController = TextEditingController();
   bool _isLoading = false;
   String? _passwordStrength;
+  bool _obscurePassword = true;
 
   final _auth = FirebaseAuth.instance;
 
@@ -37,71 +38,101 @@ class _SignupPageState extends State<SignupPage> {
     if (password.contains(RegExp(r'[0-9]'))) score++;
     if (password.contains(RegExp(r'[!@#\$%^&*(),.?":{}|<>]'))) score++;
 
-    String strength;
-    if (score <= 1) {
-      strength = 'Weak';
-    } else if (score == 2) {
-      strength = 'Fair';
-    } else if (score == 3) {
-      strength = 'Good';
-    } else {
-      strength = 'Strong';
-    }
-
     setState(() {
-      _passwordStrength = strength;
+      _passwordStrength = score <= 1
+          ? 'Weak'
+          : score == 2
+          ? 'Fair'
+          : score == 3
+          ? 'Good'
+          : 'Strong';
     });
   }
 
   Future<void> _signup() async {
-    if (!_formKey.currentState!.validate()) return;
-    if (_passwordStrength == 'Weak' || _passwordStrength == 'Fair') {
-      _showToast('Please use a stronger password.', Colors.orange);
+    // 🔒 Defensive check: ensure Form is attached
+    if (_formKey.currentState == null) {
+      debugPrint('⚠️ Form key has no currentState — missing Form widget.');
+      _showToast('UI error: Form not initialized. Please restart.', Colors.red);
       return;
     }
 
-    setState(() {
-      _isLoading = true;
-    });
+    if (!_formKey.currentState!.validate()) return;
+
+    final password = _passwordController.text.trim();
+    if (_passwordStrength == 'Weak' || _passwordStrength == 'Fair') {
+      _showToast(
+        'Please use a stronger password (at least 8 chars, upper, number, symbol).',
+        Colors.orange,
+      );
+      return;
+    }
+
+    setState(() => _isLoading = true);
 
     try {
       final userCredential = await _auth.createUserWithEmailAndPassword(
         email: _emailController.text.trim(),
-        password: _passwordController.text.trim(),
+        password: password,
       );
 
-      final token = await FirebaseMessaging.instance.getToken();
+      final user = userCredential.user;
+      if (user == null) {
+        throw Exception('User creation failed — no user returned.');
+      }
+
+      String? token = await FirebaseMessaging.instance.getToken();
+
+      final userData = {
+        'firstName': _firstNameController.text.trim(),
+        'lastName': _lastNameController.text.trim(),
+        'email': _emailController.text.trim(),
+        'phone': _phoneController.text.trim(),
+        'createdAt': FieldValue.serverTimestamp(),
+        'fcmTokens': token != null ? [token] : [],
+        'uid': user.uid,
+      };
+
       await FirebaseFirestore.instance
           .collection('users')
-          .doc(userCredential.user!.uid)
-          .set({
-            'firstName': _firstNameController.text.trim(),
-            'lastName': _lastNameController.text.trim(),
-            'email': _emailController.text.trim(),
-            'createdAt': FieldValue.serverTimestamp(),
-            'fcmTokens': token != null ? [token] : [],
-          });
+          .doc(user.uid)
+          .set(userData, SetOptions(merge: true));
 
-      _showToast('Account created successfully!', Colors.green);
+      _showToast('🎉 Account created! Welcome to TDB Closets!', Colors.green);
+
+      await user.reload();
+
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (context) => const LoginPage()),
+        MaterialPageRoute(builder: (context) => const HomePage()),
       );
     } on FirebaseAuthException catch (e) {
       String msg = 'Signup failed. Please try again.';
-      if (e.code == 'email-already-in-use') {
-        msg = 'This email is already registered.';
-      } else if (e.code == 'invalid-email') {
-        msg = 'Please enter a valid email.';
-      } else if (e.code == 'weak-password') {
-        msg = 'Password is too weak. Use at least 6 characters.';
+      switch (e.code) {
+        case 'email-already-in-use':
+          msg = '📧 This email is already registered. Try logging in.';
+          break;
+        case 'invalid-email':
+          msg = '📧 Please enter a valid email address.';
+          break;
+        case 'weak-password':
+          msg = '🔒 Password too weak. Use min. 6 characters.';
+          break;
+        case 'operation-not-allowed':
+          msg = '🚫 Signup is temporarily disabled. Contact support.';
+          break;
+        case 'network-request-failed':
+          msg = '📶 Network error. Check your connection and try again.';
+          break;
       }
       _showToast(msg, Colors.red);
     } catch (e) {
-      _showToast('Something went wrong. Please try again.', Colors.red);
+      _showToast(
+        '❌ Something unexpected happened. Please try again.',
+        Colors.red,
+      );
+      debugPrint('Signup Error: $e');
     } finally {
-      setState(() {
-        _isLoading = false;
-      });
+      setState(() => _isLoading = false);
     }
   }
 
@@ -110,7 +141,7 @@ class _SignupPageState extends State<SignupPage> {
       msg: msg,
       toastLength: Toast.LENGTH_LONG,
       gravity: ToastGravity.BOTTOM,
-      timeInSecForIosWeb: 3,
+      timeInSecForIosWeb: 4,
       backgroundColor: color,
       textColor: Colors.white,
       fontSize: 16.0,
@@ -124,76 +155,83 @@ class _SignupPageState extends State<SignupPage> {
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24.0),
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                80.h,
-                Text('Create Account', style: DhemiText.headlineMedium),
-                8.h,
-                Text(
-                  'Join us today',
-                  style: DhemiText.tagline.copyWith(
-                    fontStyle: FontStyle.normal,
-                    fontWeight: FontWeight.w400,
-                  ),
-                ),
-                30.h,
-                _buildFirstNameField(),
-                20.h,
-                _buildLastNameField(),
-                20.h,
-                _buildEmailField(),
-                20.h,
-                _buildPasswordField(),
-                if (_passwordStrength != null) ...[
+          child: Form(
+            // ✅ CRITICAL: Form wrapper added
+            key: _formKey, // ✅ With key
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  80.h,
+                  Text('Create Account', style: DhemiText.headlineMedium),
                   8.h,
                   Text(
-                    'Password strength: $_passwordStrength',
-                    style: TextStyle(
-                      color: _passwordStrength == 'Weak'
-                          ? Colors.red
-                          : _passwordStrength == 'Fair'
-                          ? Colors.orange
-                          : _passwordStrength == 'Good'
-                          ? Colors.blue
-                          : Colors.green,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
+                    'Join us today',
+                    style: DhemiText.tagline.copyWith(
+                      fontStyle: FontStyle.normal,
+                      fontWeight: FontWeight.w400,
+                    ),
+                  ),
+                  30.h,
+                  _buildFirstNameField(),
+                  20.h,
+                  _buildLastNameField(),
+                  20.h,
+                  _buildPhoneField(),
+                  20.h,
+                  _buildEmailField(),
+                  20.h,
+                  _buildPasswordField(),
+                  if (_passwordStrength != null) ...[
+                    8.h,
+                    Text(
+                      'Password strength: $_passwordStrength',
+                      style: TextStyle(
+                        color: _passwordStrength == 'Weak'
+                            ? Colors.red
+                            : _passwordStrength == 'Fair'
+                            ? Colors.orange
+                            : _passwordStrength == 'Good'
+                            ? Colors.blue
+                            : Colors.green,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ],
+                  30.h,
+                  _isLoading
+                      ? const Center(child: CircularProgressIndicator())
+                      : DhemiWidgets.button(
+                          label: 'Sign Up',
+                          onPressed: _signup,
+                          fontSize: 18,
+                          minHeight: 48,
+                        ),
+                  20.h,
+                  Center(
+                    child: TextButton(
+                      onPressed: () {
+                        Navigator.pop(context);
+                      },
+                      child: Text.rich(
+                        TextSpan(
+                          text: "Already have an account? ",
+                          style: DhemiText.bodySmall,
+                          children: [
+                            TextSpan(
+                              text: 'Sign In',
+                              style: DhemiText.bodySmall.copyWith(
+                                color: DhemiColors.royalPurple,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                 ],
-                30.h,
-                _isLoading
-                    ? const Center(child: CircularProgressIndicator())
-                    : DhemiWidgets.button(
-                        label: 'Sign Up',
-                        onPressed: _signup,
-                        fontSize: 18,
-                      ),
-                20.h,
-                Center(
-                  child: TextButton(
-                    onPressed: () {
-                      Navigator.pop(context);
-                    },
-                    child: Text.rich(
-                      TextSpan(
-                        text: "Already have an account? ",
-                        style: DhemiText.bodySmall,
-                        children: [
-                          TextSpan(
-                            text: 'Sign In',
-                            style: DhemiText.bodySmall.copyWith(
-                              color: DhemiColors.royalPurple,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
         ),
@@ -201,114 +239,128 @@ class _SignupPageState extends State<SignupPage> {
     );
   }
 
-  Widget _buildFirstNameField() {
-    return TextFormField(
-      controller: _firstNameController,
-      decoration: InputDecoration(
-        labelText: 'First Name',
-        labelStyle: DhemiText.bodySmall,
-        prefixIcon: Icon(Icons.person_outline, color: DhemiColors.royalPurple),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: DhemiColors.gray300),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: DhemiColors.royalPurple, width: 2),
-        ),
+  Widget _buildFirstNameField() => TextFormField(
+    controller: _firstNameController,
+    decoration: InputDecoration(
+      labelText: 'First Name',
+      labelStyle: DhemiText.bodySmall,
+      prefixIcon: Icon(Icons.person_outline, color: DhemiColors.royalPurple),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: DhemiColors.gray300),
       ),
-      validator: (value) {
-        if (value == null || value.isEmpty) {
-          return 'Please enter your first name';
-        }
-        return null;
-      },
-    );
-  }
-
-  Widget _buildLastNameField() {
-    return TextFormField(
-      controller: _lastNameController,
-      decoration: InputDecoration(
-        labelText: 'Last Name',
-        labelStyle: DhemiText.bodySmall,
-        prefixIcon: Icon(Icons.person_outline, color: DhemiColors.royalPurple),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: DhemiColors.gray300),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: DhemiColors.royalPurple, width: 2),
-        ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: DhemiColors.royalPurple, width: 2),
       ),
-      validator: (value) {
-        if (value == null || value.isEmpty) {
-          return 'Please enter your last name';
-        }
-        return null;
-      },
-    );
-  }
+    ),
+    validator: (value) =>
+        value?.trim().isEmpty == true ? 'Please enter your first name' : null,
+  );
 
-  Widget _buildEmailField() {
-    return TextFormField(
-      controller: _emailController,
-      decoration: InputDecoration(
-        labelText: 'Email',
-        labelStyle: DhemiText.bodySmall,
-        prefixIcon: Icon(Icons.email_outlined, color: DhemiColors.royalPurple),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: DhemiColors.gray300),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: DhemiColors.royalPurple, width: 2),
-        ),
+  Widget _buildLastNameField() => TextFormField(
+    controller: _lastNameController,
+    decoration: InputDecoration(
+      labelText: 'Last Name',
+      labelStyle: DhemiText.bodySmall,
+      prefixIcon: Icon(Icons.person_outline, color: DhemiColors.royalPurple),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: DhemiColors.gray300),
       ),
-      keyboardType: TextInputType.emailAddress,
-      validator: (value) {
-        if (value == null || value.isEmpty) {
-          return 'Please enter your email';
-        } else if (!RegExp(r'^[^@]+@[^@]+\.[^@]+').hasMatch(value)) {
-          return 'Please enter a valid email';
-        }
-        return null;
-      },
-    );
-  }
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: DhemiColors.royalPurple, width: 2),
+      ),
+    ),
+    validator: (value) =>
+        value?.trim().isEmpty == true ? 'Please enter your last name' : null,
+  );
 
-  Widget _buildPasswordField() {
-    return TextFormField(
-      controller: _passwordController,
-      obscureText: true,
-      onChanged: _checkPasswordStrength,
-      decoration: InputDecoration(
-        labelText: 'Password',
-        labelStyle: DhemiText.bodySmall,
-        prefixIcon: Icon(Icons.lock_outline, color: DhemiColors.royalPurple),
-        suffixIcon: const Icon(
-          Icons.visibility_off,
+  Widget _buildPhoneField() => TextFormField(
+    controller: _phoneController,
+    decoration: InputDecoration(
+      labelText: 'Phone Number',
+      labelStyle: DhemiText.bodySmall,
+      prefixIcon: Icon(Icons.phone_outlined, color: DhemiColors.royalPurple),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: DhemiColors.gray300),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: DhemiColors.royalPurple, width: 2),
+      ),
+    ),
+    keyboardType: TextInputType.phone,
+    validator: (value) {
+      final trimmed = value?.trim() ?? '';
+      if (trimmed.isEmpty) return 'Please enter your phone number';
+      final digitsOnly = RegExp(
+        r'\d{10,}',
+      ).hasMatch(trimmed.replaceAll(RegExp(r'\D'), ''));
+      if (!digitsOnly) {
+        return 'Please enter a valid phone number (e.g. +2348012345678)';
+      }
+      return null;
+    },
+  );
+
+  Widget _buildEmailField() => TextFormField(
+    controller: _emailController,
+    decoration: InputDecoration(
+      labelText: 'Email',
+      labelStyle: DhemiText.bodySmall,
+      prefixIcon: Icon(Icons.email_outlined, color: DhemiColors.royalPurple),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: DhemiColors.gray300),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: DhemiColors.royalPurple, width: 2),
+      ),
+    ),
+    keyboardType: TextInputType.emailAddress,
+    validator: (value) {
+      final email = value?.trim();
+      if (email == null || email.isEmpty) return 'Please enter your email';
+      final emailRegex = RegExp(r'^[^@]+@[^@]+\.[^@]+');
+      if (!emailRegex.hasMatch(email)) return 'Please enter a valid email';
+      return null;
+    },
+  );
+
+  Widget _buildPasswordField() => TextFormField(
+    controller: _passwordController,
+    obscureText: _obscurePassword,
+    onChanged: _checkPasswordStrength,
+    decoration: InputDecoration(
+      labelText: 'Password',
+      labelStyle: DhemiText.bodySmall,
+      prefixIcon: Icon(Icons.lock_outline, color: DhemiColors.royalPurple),
+      suffixIcon: IconButton(
+        icon: Icon(
+          _obscurePassword ? Icons.visibility_off : Icons.visibility,
           color: DhemiColors.gray500,
         ),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: DhemiColors.gray300),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: DhemiColors.royalPurple, width: 2),
-        ),
+        onPressed: () {
+          setState(() => _obscurePassword = !_obscurePassword);
+        },
       ),
-      validator: (value) {
-        if (value == null || value.isEmpty) {
-          return 'Please enter a password';
-        } else if (value.length < 6) {
-          return 'Password must be at least 6 characters';
-        }
-        return null;
-      },
-    );
-  }
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: DhemiColors.gray300),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: DhemiColors.royalPurple, width: 2),
+      ),
+    ),
+    validator: (value) {
+      if (value == null || value.isEmpty) return 'Please enter a password';
+      if (value.length < 6) return 'Password must be at least 6 characters';
+      return null;
+    },
+  );
 }

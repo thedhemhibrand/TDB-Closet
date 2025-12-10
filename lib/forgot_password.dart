@@ -103,6 +103,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                       label: 'Send Reset Link',
                       onPressed: _sendResetLink,
                       fontSize: 18,
+                      minHeight: 48,
                     ),
               20.h,
               Text.rich(

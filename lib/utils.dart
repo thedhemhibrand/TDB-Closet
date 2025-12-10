@@ -3,15 +3,11 @@ import 'package:flutter/material.dart';
 
 // 🎨 BRAND COLORS
 class DhemiColors {
-  // Primary Brand
-  static const Color royalPurple = Color(0xFF5E006C); // Main Brand Color
-  static const Color softPurple = Color(0xFFB07ABC);   // Accent for taglines
-
-  // Neutrals (for text, borders, backgrounds)
+  static const Color royalPurple = Color(0xFF5E006C);
+  static const Color softPurple = Color(0xFFB07ABC);
   static const Color white = Colors.white;
   static const Color black = Colors.black;
 
-  // Grayscale (commonly used in UI)
   static const Color gray50 = Color(0xFFF9FAFB);
   static const Color gray100 = Color(0xFFF3F4F6);
   static const Color gray200 = Color(0xFFE5E7EB);
@@ -20,36 +16,31 @@ class DhemiColors {
   static const Color gray500 = Color(0xFF6B7280);
   static const Color gray600 = Color(0xFF4B5563);
   static const Color gray700 = Color(0xFF374151);
-  static const Color gray800 = Color(0xFF1F2937);
+  static const Color gray800 = Color(0xFF374151);
   static const Color gray900 = Color(0xFF111827);
 }
 
-// ✒️ TYPOGRAPHY STYLES — Assumes fonts are added in pubspec.yaml:
-//   - Cinzel (Bold, SemiBold)
-//   - Montserrat (Light, Regular)
+// ✒️ TYPOGRAPHY
 class DhemiText {
-  // 🖋️ Primary: Cinzel (Serif) — Titles, Logo
+  // Cinzel
   static TextStyle logo = const TextStyle(
     fontFamily: 'Cinzel',
     fontWeight: FontWeight.bold,
     fontSize: 32,
     color: DhemiColors.royalPurple,
   );
-
   static TextStyle header = const TextStyle(
     fontFamily: 'Cinzel',
     fontWeight: FontWeight.bold,
     fontSize: 26,
     color: DhemiColors.royalPurple,
   );
-
   static TextStyle headlineMedium = const TextStyle(
     fontFamily: 'Cinzel',
     fontWeight: FontWeight.bold,
     fontSize: 24,
     color: DhemiColors.royalPurple,
   );
-
   static TextStyle headlineSmall = const TextStyle(
     fontFamily: 'Cinzel',
     fontWeight: FontWeight.bold,
@@ -57,42 +48,37 @@ class DhemiText {
     color: DhemiColors.royalPurple,
   );
 
-  // 📝 Secondary: Montserrat (Sans-Serif) — Body, Buttons, Labels
+  // Montserrat
   static TextStyle bodyLarge = const TextStyle(
     fontFamily: 'Montserrat',
     fontWeight: FontWeight.w600,
     fontSize: 16,
     color: DhemiColors.royalPurple,
   );
-
   static TextStyle bodyMedium = const TextStyle(
     fontFamily: 'Montserrat',
     fontWeight: FontWeight.w500,
     fontSize: 16,
     color: DhemiColors.royalPurple,
   );
-
   static TextStyle body = const TextStyle(
     fontFamily: 'Montserrat',
     fontWeight: FontWeight.w400,
     fontSize: 16,
     color: DhemiColors.royalPurple,
   );
-
   static TextStyle bodySmall = const TextStyle(
     fontFamily: 'Montserrat',
     fontWeight: FontWeight.w400,
     fontSize: 14,
     color: DhemiColors.royalPurple,
   );
-
   static TextStyle subtitle = const TextStyle(
     fontFamily: 'Montserrat',
     fontWeight: FontWeight.w400,
     fontSize: 18,
     color: DhemiColors.royalPurple,
   );
-
   static TextStyle tagline = const TextStyle(
     fontFamily: 'Montserrat',
     fontWeight: FontWeight.w300,
@@ -102,16 +88,65 @@ class DhemiText {
   );
 }
 
-// 📐 Spacing Extensions (e.g., 16.h or 8.w)
+// 📐 Spacing Extensions
 extension Spacing on num {
-
   SizedBox get h => SizedBox(height: toDouble());
   SizedBox get w => SizedBox(width: toDouble());
 }
 
-// 🧱 Reusable Widget Builders
+// 🧰 UTILITY FUNCTIONS — NEW & ENHANCED
+class DhemiUtils {
+  /// Safely convert any value to int (handles null, string, double, int)
+  static int safeInt(dynamic value, {int fallback = 0}) {
+    if (value == null) return fallback;
+    if (value is int) return value;
+    if (value is double) return value.toInt();
+    if (value is String) {
+      final trimmed = value.trim();
+      if (trimmed.isEmpty) return fallback;
+      // Handle "₦1,500" → 1500
+      final cleaned = trimmed.replaceAll(RegExp(r'[^\d-]'), '');
+      return int.tryParse(cleaned) ?? fallback;
+    }
+    return fallback;
+  }
+
+  /// Format currency: ₦1,250 | ₦12,500.00 → uses grouping, no decimals for whole numbers
+  static String formatCurrency(int amount) {
+    if (amount < 0) {
+      return '-₦${(-amount).toString().replaceAllMapped(RegExp(r'(\d)(?=(\d{3})+(?!\d))'), (Match m) => '${m[1]},')}';
+    }
+    return '₦${amount.toString().replaceAllMapped(RegExp(r'(\d)(?=(\d{3})+(?!\d))'), (Match m) => '${m[1]},')}';
+  }
+
+  /// Format date for UI (used in ProfilePage order history)
+  static String formatDate(DateTime? date) {
+    if (date == null) return '—';
+    final now = DateTime.now();
+    final diff = now.difference(date);
+
+    if (diff.inDays == 0) {
+      return 'Today, ${_twoDigits(date.hour)}:${_twoDigits(date.minute)}';
+    } else if (diff.inDays == 1) {
+      return 'Yesterday';
+    } else if (diff.inDays < 7) {
+      return '${diff.inDays}d ago';
+    } else {
+      return '${date.day}/${date.month}/${date.year}';
+    }
+  }
+
+  static String _twoDigits(int n) => n.toString().padLeft(2, '0');
+
+  /// Safely truncate string with ellipsis
+  static String truncate(String text, {int length = 30}) {
+    if (text.length <= length) return text;
+    return '${text.substring(0, length - 3)}...';
+  }
+}
+
+// 🧱 REUSABLE WIDGETS
 class DhemiWidgets {
-  /// Dhemi Logo: "THE DHEMHI BRAND"
   static Widget logo({double fontSize = 28}) {
     return Text(
       'THE DHEMHI BRAND',
@@ -120,61 +155,55 @@ class DhemiWidgets {
     );
   }
 
-  /// Header with optional subtitle & tagline
   static Widget header({
     required String title,
     String? subtitle,
     String? tagline,
   }) {
-    final children = <Widget>[
-      Text(title, style: DhemiText.header),
-    ];
-
+    final children = <Widget>[Text(title, style: DhemiText.header)];
     if (subtitle != null) {
-      children.add(4.h);
-      children.add(Text(subtitle, style: DhemiText.subtitle));
+      children
+        ..add(4.h)
+        ..add(Text(subtitle, style: DhemiText.subtitle));
     }
-
     if (tagline != null) {
-      children.add(6.h);
-      children.add(Text(tagline, style: DhemiText.tagline));
+      children
+        ..add(6.h)
+        ..add(Text(tagline, style: DhemiText.tagline));
     }
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: children,
     );
   }
 
-  /// Solid Brand Button
   static Widget button({
     required String label,
     required VoidCallback onPressed,
     double fontSize = 16,
     double horizontalPadding = 24,
     double verticalPadding = 14,
+    required int minHeight,
   }) {
-    return ElevatedButton(
-      onPressed: onPressed,
-      style: ElevatedButton.styleFrom(
-        backgroundColor: DhemiColors.royalPurple,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        padding: EdgeInsets.symmetric(
-          horizontal: horizontalPadding,
-          vertical: verticalPadding,
+    return SizedBox(
+      height: minHeight.toDouble(),
+      child: ElevatedButton(
+        onPressed: onPressed,
+        style: ElevatedVectorButtonStyle(
+          backgroundColor: DhemiColors.royalPurple,
+          radius: 12,
         ),
-      ),
-      child: Text(
-        label,
-        style: DhemiText.bodyLarge.copyWith(
-          fontSize: fontSize,
-          color: DhemiColors.white,
+        child: Text(
+          label,
+          style: DhemiText.bodyLarge.copyWith(
+            fontSize: fontSize,
+            color: DhemiColors.white,
+          ),
         ),
       ),
     );
   }
 
-  /// Outlined Brand Button
   static Widget outlinedButton({
     required String label,
     required VoidCallback onPressed,
@@ -185,7 +214,7 @@ class DhemiWidgets {
       style: OutlinedButton.styleFrom(
         side: BorderSide(color: DhemiColors.royalPurple, width: 2),
         foregroundColor: DhemiColors.royalPurple,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
       child: Text(
         label,
@@ -193,4 +222,100 @@ class DhemiWidgets {
       ),
     );
   }
+
+  // ✨ Modern quantity stepper
+  static Widget quantityStepper({
+    required int value,
+    required int max,
+    required VoidCallback onIncrement,
+    required VoidCallback onDecrement,
+  }) {
+    return Row(
+      children: [
+        _buildStepperButton(
+          icon: Icons.remove,
+          enabled: value > 1,
+          onTap: onDecrement,
+        ),
+        12.w,
+        Container(
+          width: 56,
+          height: 44,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: DhemiColors.gray100,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: DhemiColors.gray300),
+          ),
+          child: Text(
+            '$value',
+            style: DhemiText.bodyLarge.copyWith(fontSize: 18),
+          ),
+        ),
+        12.w,
+        _buildStepperButton(
+          icon: Icons.add,
+          enabled: value < max,
+          onTap: onIncrement,
+        ),
+      ],
+    );
+  }
+
+  static Widget _buildStepperButton({
+    required IconData icon,
+    required bool enabled,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: enabled ? onTap : null,
+      child: Container(
+        width: 44,
+        height: 44,
+        decoration: BoxDecoration(
+          color: enabled ? DhemiColors.gray200 : DhemiColors.gray50,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: DhemiColors.gray300),
+        ),
+        child: Icon(
+          icon,
+          size: 20,
+          color: enabled ? DhemiColors.gray800 : DhemiColors.gray400,
+        ),
+      ),
+    );
+  }
+
+  // ✨ Dot Indicator for carousels
+  static Widget dotIndicator(int length, int currentIndex) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: List.generate(length, (i) {
+        return Container(
+          width: i == currentIndex ? 20 : 8,
+          height: 8,
+          margin: EdgeInsets.symmetric(horizontal: 4),
+          decoration: BoxDecoration(
+            color: i == currentIndex
+                ? DhemiColors.royalPurple
+                : DhemiColors.gray300,
+            borderRadius: BorderRadius.circular(4),
+          ),
+        );
+      }),
+    );
+  }
+}
+
+// ✨ Helper for clean ElevatedButton styling
+ButtonStyle ElevatedVectorButtonStyle({
+  required Color backgroundColor,
+  double radius = 12,
+}) {
+  return ElevatedButton.styleFrom(
+    backgroundColor: backgroundColor,
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius)),
+    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+    textStyle: const TextStyle(fontWeight: FontWeight.w600),
+  );
 }
