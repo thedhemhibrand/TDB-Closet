@@ -1,10 +1,13 @@
 // lib/screens/payment_page.dart
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutterwave_standard/flutterwave.dart';
 import 'package:uuid/uuid.dart';
 import 'package:tdb_closet/utils.dart';
+import 'dart:html' as html;
+import 'dart:ui' as ui;
 
 class PaymentPage extends StatefulWidget {
   final Map<String, dynamic> orderData;
@@ -124,6 +127,102 @@ class _PaymentPageState extends State<PaymentPage> {
     return null;
   }
 
+  /// WEB-SPECIFIC: Open Flutterwave payment in popup/new tab
+  Future<void> _processWebPayment(
+    String txRef,
+    int totalAmount,
+    String customerEmail,
+    String customerName,
+    String customerPhone,
+  ) async {
+    try {
+      // Create Flutterwave inline payment URL
+      final redirectUrl = Uri.base.toString().replaceAll(
+        RegExp(r'#.*$'),
+        '#/payment-callback',
+      );
+
+      final paymentUrl = Uri.https('checkout.flutterwave.com', '/v3/hosted/pay', {
+        'public_key': _flutterwavePublicKey!,
+        'tx_ref': txRef,
+        'amount': totalAmount.toString(),
+        'currency': 'NGN',
+        'customer[email]': customerEmail,
+        'customer[name]': customerName,
+        'customer[phone_number]': customerPhone,
+        'customizations[title]': 'TDB Closet Order Payment',
+        'customizations[description]': 'Payment for order $txRef',
+        'redirect_url': redirectUrl,
+        'payment_options': 'card,banktransfer,ussd',
+      });
+
+      debugPrint('🌐 Opening payment URL: $paymentUrl');
+
+      // Open payment in popup window
+      final popup = html.window.open(
+        paymentUrl.toString(),
+        'FlutterwavePayment',
+        'width=600,height=800,scrollbars=yes,resizable=yes',
+      );
+
+      if (popup == null) {
+        throw Exception('Popup blocked. Please allow popups for this site.');
+      }
+
+      // Listen for payment callback via window messages
+      _listenForPaymentCallback(txRef, totalAmount, customerEmail, customerName, customerPhone);
+    } catch (e) {
+      debugPrint('❌ Web payment error: $e');
+      rethrow;
+    }
+  }
+
+  /// Listen for payment completion message from popup
+  void _listenForPaymentCallback(
+    String txRef,
+    int totalAmount,
+    String customerEmail,
+    String customerName,
+    String customerPhone,
+  ) {
+    html.window.onMessage.listen((event) async {
+      debugPrint('📨 Received message: ${event.data}');
+
+      if (event.data is Map && event.data['type'] == 'flutterwave-payment') {
+        final status = event.data['status'] as String?;
+        final transactionId = event.data['transaction_id'] as String?;
+
+        if (status == 'successful' && transactionId != null) {
+          final user = _auth.currentUser;
+          if (user != null) {
+            await _saveOrderAndPayment(
+              txRef,
+              totalAmount,
+              user,
+              customerEmail,
+              customerName,
+              customerPhone,
+            );
+
+            if (mounted) {
+              _navigateToSuccessScreen(txRef, totalAmount);
+            }
+          }
+        } else if (status == 'cancelled') {
+          if (mounted) {
+            setState(() => _isProcessing = false);
+            _showError('Payment was cancelled. Please try again.');
+          }
+        } else {
+          if (mounted) {
+            setState(() => _isProcessing = false);
+            _showError('Payment failed. Please try again.');
+          }
+        }
+      }
+    });
+  }
+
   Future<void> _processPayment() async {
     if (_isProcessing) return;
 
@@ -209,12 +308,6 @@ class _PaymentPageState extends State<PaymentPage> {
     setState(() => _isProcessing = true);
 
     try {
-      final Customer customer = Customer(
-        name: customerName,
-        email: customerEmail,
-        phoneNumber: validatedPhone,
-      );
-
       final String txRef = 'TDB-${const Uuid().v4()}';
 
       debugPrint('💳 Payment Details:');
@@ -223,6 +316,26 @@ class _PaymentPageState extends State<PaymentPage> {
       debugPrint('  Phone: $validatedPhone');
       debugPrint('  Amount: ₦$totalAmount');
       debugPrint('  Ref: $txRef');
+      debugPrint('  Platform: ${kIsWeb ? 'WEB' : 'MOBILE'}');
+
+      // Use web-specific payment flow for web platform
+      if (kIsWeb) {
+        await _processWebPayment(
+          txRef,
+          totalAmount,
+          customerEmail,
+          customerName,
+          validatedPhone,
+        );
+        return;
+      }
+
+      // Mobile payment flow (original)
+      final Customer customer = Customer(
+        name: customerName,
+        email: customerEmail,
+        phoneNumber: validatedPhone,
+      );
 
       final Flutterwave flutterwave = Flutterwave(
         publicKey: _flutterwavePublicKey!,
@@ -267,7 +380,7 @@ class _PaymentPageState extends State<PaymentPage> {
         );
       }
     } catch (e, st) {
-      debugPrint('❌ Flutterwave payment error: $e\n$st');
+      debugPrint('❌ Payment error: $e\n$st');
 
       String errorMessage = 'Payment failed. Please try again.';
       if (e.toString().toLowerCase().contains('email')) {
@@ -277,11 +390,13 @@ class _PaymentPageState extends State<PaymentPage> {
         errorMessage = 'Network error. Please check your connection.';
       } else if (e.toString().toLowerCase().contains('key')) {
         errorMessage = 'Payment configuration error. Please contact support.';
+      } else if (e.toString().toLowerCase().contains('popup')) {
+        errorMessage = 'Please enable popups for this site to complete payment.';
       }
 
       _showError(errorMessage);
     } finally {
-      if (mounted) setState(() => _isProcessing = false);
+      if (mounted && !kIsWeb) setState(() => _isProcessing = false);
     }
   }
 
@@ -336,8 +451,7 @@ class _PaymentPageState extends State<PaymentPage> {
     debugPrint('✅ Order, payment saved, and cart cleared successfully');
   }
 
-  /// ✅ CTO-Level: Clears cart items for the given user using 'userId' field
-  /// Assumes cart items were created with 'userId' (must be true!)
+  /// Clears cart items for the given user using 'userId' field
   Future<void> _clearUserCart(String userId) async {
     try {
       final querySnapshot = await _firestore
@@ -357,9 +471,7 @@ class _PaymentPageState extends State<PaymentPage> {
       await batch.commit();
       debugPrint('✅ Cart cleared for user: $userId');
     } catch (e, stackTrace) {
-      // Log error but do NOT fail the payment flow
       debugPrint('⚠️ Failed to clear cart for user $userId: $e\n$stackTrace');
-      // In production, log to Crashlytics/Firebase Monitoring
     }
   }
 
@@ -477,6 +589,31 @@ class _PaymentPageState extends State<PaymentPage> {
                     ),
                     16.h,
                     _buildFlutterwaveTile(),
+                    if (kIsWeb) ...[
+                      12.h,
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.blue.shade200),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.info_outline, color: Colors.blue.shade700, size: 20),
+                            12.w,
+                            Expanded(
+                              child: Text(
+                                'Please allow popups to complete payment',
+                                style: DhemiText.bodySmall.copyWith(
+                                  color: Colors.blue.shade700,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                     const Spacer(),
                     Center(
                       child: SizedBox(
